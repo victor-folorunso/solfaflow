@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 MAJOR_DEGREES = ("do", "re", "mi", "fa", "so", "la", "ti")
 MINOR_DEGREES = ("la", "ti", "do", "re", "mi", "fa", "so")
-RAISED_SYLLABLES = {1: "di", 3: "ri", 4: "fi", 6: "si", 8: "li"}
+RAISED_SYLLABLES = {1: "di", 3: "ri", 6: "fi", 8: "si", 10: "li"}
 MAJOR_OFFSETS = (0, 2, 4, 5, 7, 9, 11)
 NATURAL_MINOR_OFFSETS = (0, 2, 3, 5, 7, 8, 10)
 
