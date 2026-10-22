@@ -43,3 +43,15 @@ Run tests with: pytest
 
 ## License
 Project license and model-specific licensing decisions are pending. Do not assume third-party model weights are commercially usable just because their source code is open source.
+
+## Handoff and research documents
+
+If you're an AI agent or developer picking up this repository, read these first:
+
+- [Agent instructions](AGENTS.md)
+- [Full project handoff and conversation notes](docs/PROJECT_HANDOFF.md)
+- [Engine research and evaluation plan](docs/ENGINE_RESEARCH.md)
+- [Architecture and roadmap](docs/ARCHITECTURE_AND_ROADMAP.md)
+- [Decisions and open questions](docs/DECISIONS.md)
+
+These documents distinguish what the user asked for, what is currently scaffolded, and what remains unverified. In particular, no transcription model has yet been benchmarked in this project.
