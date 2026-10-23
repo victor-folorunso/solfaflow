@@ -1,0 +1,7 @@
+# Song pages and results are private to the person who uploaded them.
+User-agent: *
+Disallow: /songs
+Disallow: /results/
+Disallow: /api/
+
+Sitemap: https://solfaflow.com/sitemap.xml

@@ -70,7 +70,52 @@ def test_real_la_cucaracha_transcription_is_keyed_in_a():
     result = to_solfa(raw)
     assert result["do"] == "A"
     syllables = [n["syllable"] for n in result["notes"]]
-    assert syllables[:5] == ["so", "so", "si", "so", "do"]  # "la cu-ca-ra-cha", with one scoop note
+    # "la cu-ca-ra-cha": s s s d m. The singer's scoop into the third "so" used to read as "si".
+    assert syllables[:7] == ["so", "so", "so", "so", "do", "do", "mi"]
+    assert all(s in {"do", "re", "mi", "fa", "so", "la", "ti"} for s in syllables)
+
+
+MARY_VERSE = "mi re do re mi mi mi re re re mi so so mi re do re mi mi mi mi re re mi re do".split()
+
+
+def edit_distance(a: list[str], b: list[str]) -> int:
+    row = list(range(len(b) + 1))
+    for i, x in enumerate(a, 1):
+        diag, row[0] = row[0], i
+        for j, y in enumerate(b, 1):
+            diag, row[j] = row[j], min(row[j] + 1, row[j - 1] + 1, diag + (x != y))
+    return row[-1]
+
+
+def test_mary_had_a_little_lamb_matches_known_tune_after_slide_cleanup():
+    # GAME notes from a user-supplied recording; reference is the standard tune, three verses in 36 s.
+    # The singer slides between do and mi, which used to read as "ri".
+    with open(FIXTURES / "mary_had_a_little_lamb_game_notes.csv", newline="") as f:
+        raw = [RawNote(float(r["onset"]), float(r["offset"]), float(r["pitch"])) for r in csv.DictReader(f)]
+    notes = [n for n in to_solfa(raw, do_pitch_class=0)["notes"] if n["start"] < 36]
+    reference = MARY_VERSE * 3
+    syllables = ["do", "di", "re", "ri", "mi", "fa", "fi", "so", "si", "la", "li", "ti"]
+    exact = [syllables[(n["exact_pitch_midi"] - 60) % 12] for n in notes]
+    cleaned = [n["syllable"] for n in notes]
+    exact_accuracy = 1 - edit_distance(reference, exact) / len(reference)
+    cleaned_accuracy = 1 - edit_distance(reference, cleaned) / len(reference)
+    assert cleaned_accuracy > exact_accuracy
+    assert cleaned_accuracy >= 0.83  # measured 0.833 (exact: 0.756)
+    assert "ri" not in cleaned
+
+
+def test_long_centred_chromatic_note_is_kept():
+    # A held, squarely sung F# in C major is deliberate, not a slide.
+    notes = [RawNote(0.0, 0.4, 64), RawNote(0.4, 1.4, 66.05), RawNote(1.4, 1.8, 67)]
+    result = to_solfa(notes, do_pitch_class=0)
+    assert result["notes"][1]["syllable"] == "fi"
+
+
+def test_short_slide_between_do_and_mi_becomes_re():
+    notes = [RawNote(0.0, 0.3, 60.0), RawNote(0.3, 0.6, 62.95), RawNote(0.6, 0.9, 64.0)]
+    result = to_solfa(notes * 1, do_pitch_class=0, min_duration=0.07)
+    assert [n["syllable"] for n in result["notes"]] == ["do", "re", "mi"]
+    assert result["notes"][1]["exact_pitch_midi"] == 63
 
 
 def test_minor_melody_is_la_based():

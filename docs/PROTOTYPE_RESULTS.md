@@ -78,6 +78,70 @@ solfa every time.
 Still slow on this laptop: ~11× real time per chunk. An instrumental intro delays the first visible solfa because
 it is transcribed (as nothing) first. Fixes: a GPU, and transcribing the intro's instrument melody (open question).
 
+## Slide cleanup, piano sound and chords — 2026-10-23
+
+### Slide cleanup (`keyboard.clean_slides`)
+
+Singers slide into and between notes; GAME then reports pitches between two keys that snap to a sharp/flat
+("do **ri** mi" for a sung "do re mi"). An out-of-key note now moves to the nearer in-key note, unless it is held
+(≥ 0.6 s) and sung squarely on the chromatic key (± 0.25 semitone). If the nearer note would just repeat a neighbour
+while the other in-key note lies between them (a third apart at most), it is a passing step ("mi ri do" → "mi re do").
+The exact, uncleaned notes are kept and the player has an **Exact (as sung)** view.
+
+| Recording | Before | After |
+|---|---|---|
+| Mary Had a Little Lamb (user upload), first 36 s, do = C, vs the standard tune (3 verses, 78 notes, edit distance) | syllable accuracy **0.756** (6 × *ri*, 2 × *si*) | **0.833**, no *ri* left |
+| La Cucaracha (separated) | 4 chromatic syllables from scoops, e.g. *so so **si** so do* | **0** chromatics; chorus reads *so, so, so, so, do do mi* |
+| Love in Vain (blues) | — | 21 notes changed. Some are probably real blue notes, not slides: the in-key prior is wrong for blues, hence the Exact view |
+
+What is left on Mary is mostly the singer's own repeated/merged syllables and pickup or breath notes, not pitch errors.
+The rule is mirrored in the player's JavaScript so changing do re-cleans instantly; the two implementations were
+compared on both fixture songs for all 12 possible keys: **2,748 notes, 0 mismatches**.
+
+### Piano-like playback
+
+"Detected notes" now plays a synthetic piano-like tone (8 slightly inharmonic overtones decaying faster the higher they
+are, two strings detuned ±0.7 cents, damper release at note end), with detected chords softly underneath. Rendering
+131 notes takes ~1.7 s on this laptop; repeated notes are cached because the track is re-rendered after every chunk.
+
+### Chords (`chords.py`)
+
+Method: chroma (CQT, ~93 ms frames) of the separator's accompaniment stem, matched against the 24 major/minor triads,
+Viterbi-smoothed with a chord-change penalty; quiet frames are "no chord", pauses ≤ 0.5 s are bridged, chords
+< 0.6 s are folded into the previous one. Deterministic, no extra model or download. The separator already computed
+the accompaniment; it is now saved instead of discarded.
+
+**Bug found and fixed on the first real run:** the separator names this model's stems in lowercase ("(vocals)"),
+so the vocal stem was filed as accompaniment and transcription had no input. Matching is now case-insensitive and
+fails loudly if no vocal stem is found.
+
+**Second fix:** on Mary the quiet moments between accompaniment hits (0.28 s gaps) split chords into fragments
+(median chord 0.47 s, 33 chords in 30 s). Bridging short pauses gave a median of 1.12 s, 26 chords.
+
+| Recording | Chords detected (start s: chord) | Plausible? |
+|---|---|---|
+| La Cucaracha (43.5 s) | 0.3 A · 4.4 E · 10.2 A · 16.0 E · 21.8 A · 27.6 E · 33.5 A · 35.0 E · 36.4 A · 37.8 E · 42.2 A (E 23.3 s, A 19.7 s) | **Yes**: I and V in A, the usual harmony for this song; even the guitar intro (0–11 s) gets chords |
+| Mary Had a Little Lamb, first 30 s | 0.1 C · 0.7 Gm · 1.3 C · 1.9 G · 2.6 C · 4.5 G · 6.3 C · 7.6 G · 8.8 C · 10.0 Am · 12.5 Dm · 13.3 G · 13.9 C · 17.1 Em · 17.7 G · 19.0 C · 20.1 Am · 21.5 A · 22.6 G · 24.0 C · … | **Mostly**: C and G (I and V) dominate, as expected; the Gm, A, Dm are probably errors |
+
+Neither has been checked against a reference chord chart, so chord accuracy is still **unmeasured**. Limits: major/minor
+triads only (sevenths, sus and slash chords map to the nearest triad), no bass-note or beat awareness.
+
+**Chords as key evidence: tried, measured, switched off** (`USE_CHORDS_FOR_KEY = False`). Adding chord tones to
+the key estimate (melody and harmony weighted equally) fixed neither song and broke one:
+
+| Recording | Melody only | Melody + chord tones |
+|---|---|---|
+| La Cucaracha (true do = A) | **do = A** (0.869 vs E 0.844) | do = E (0.922 vs A 0.783), wrong |
+| Mary (true do = C) | do = G (0.621 vs C 0.482), wrong | do = G (0.788 vs C 0.691), wrong |
+
+The cause is systematic: an I–V accompaniment (A and E) contains exactly the notes of IV–I a fifth higher (E major),
+so chord tones pull do up a fifth; Mary's C and G pull toward G the same way. Ideas for a better use of chords, not
+yet tried: the first/last chord as tonic (right for La Cucaracha's A; Mary's first chord C is right, its last chord in
+a 30 s excerpt is not), or the bass note under each chord.
+
+In the browser (Mary, do set to C): chords show as **C I · G V · C I…** above the notes, the intro shows chord chips,
+three chord-tone keys light on the mini keyboard during playback, Show/Hide works, no console errors.
+
 ## Findings that changed the code
 
 1. **Vocal separation is necessary** — without it, accompaniment leaks in as wrong notes.
@@ -90,8 +154,10 @@ it is transcribed (as nothing) first. Fixes: a GPU, and transcribing the intro's
 
 - No human-verified reference annotations → no real accuracy numbers. Next step: annotate 10–20 clips of the songs
   target users actually play.
-- Short pitch scoops/ornaments become separate chromatic notes; needs an ornament filter tuned on real data.
+- Slide cleanup prefers in-key notes, so genuine chromatic/blue notes that are short get "cleaned" (Exact view keeps them).
+- Key estimate still wrong on Mary Had a Little Lamb (the user sets do = C in the player). Chord tones as
+  evidence made things worse (I–V reads as IV–I a fifth up). Untried: phrase-final notes, first/last chord, bass notes.
+- Chord accuracy unmeasured; triads only.
 - Repeated syllables on one pitch are sometimes merged into one long note (without separation, seen once).
-- Player was checked as a static render only; playback/highlight sync not yet tested by a person in a browser.
 - No rhythm/beat grid: durations are shown as bar lengths, not musical note values.
 - Weight licences (GAME, RoFormer checkpoint) unverified.

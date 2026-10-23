@@ -44,6 +44,7 @@ class KeyNote:
     end: float
     pitch_midi: int
     raw_pitch: float
+    tuned_pitch: float  # raw pitch with the tuning offset removed (still fractional)
 
 
 @dataclass(frozen=True)
@@ -57,11 +58,13 @@ class KeyEstimate:
 class SolfaKeyNote:
     start: float
     end: float
-    pitch_midi: int
+    pitch_midi: int  # after slide cleanup: the key to play
     syllable: str
     octave_mark: str
     key_name: str
     raw_pitch: float
+    tuned_pitch: float
+    exact_pitch_midi: int  # nearest key to what was sung, before cleanup
 
 
 def estimate_tuning_offset(notes: list[RawNote]) -> float:
@@ -122,7 +125,7 @@ def snap_to_keys(
         pitch = round(note.pitch - offset)
         if not 0 <= pitch <= 127:
             continue
-        snapped.append(KeyNote(note.start, note.end, pitch, note.pitch))
+        snapped.append(KeyNote(note.start, note.end, pitch, note.pitch, note.pitch - offset))
     return snapped
 
 
@@ -137,13 +140,19 @@ def _correlation(a: list[float], b: tuple[float, ...]) -> float:
 FINAL_NOTE_BONUS = 0.05
 
 
-def estimate_do(notes: list[KeyNote]) -> list[KeyEstimate]:
+def estimate_do(notes: list[KeyNote], harmony: list[float] | None = None) -> list[KeyEstimate]:
     """Rank the 12 possible "do" keys for a melody, best first.
 
     Each candidate do is scored by the better of its major key and its
     relative minor (tonic = la = do + 9 semitones). Melodies usually end on
     their tonic, so a key whose tonic is the final note gets a small bonus;
     this breaks near-ties such as a tune that dwells on so (La Cucaracha).
+
+    harmony, if given, is seconds per pitch class sounding in the
+    accompaniment's chords (chords.tone_histogram). Melody and harmony get
+    equal weight: a simple tune like Mary Had a Little Lamb uses only four
+    notes and sits on mi, which alone looks like E minor, but its C, F and
+    G chords point straight at C.
     """
     final_pc = max(notes, key=lambda n: n.end).pitch_midi % 12 if notes else None
     histogram = [0.0] * 12
@@ -151,6 +160,9 @@ def estimate_do(notes: list[KeyNote]) -> list[KeyEstimate]:
         histogram[note.pitch_midi % 12] += note.end - note.start
     if not any(histogram):
         raise ValueError("no notes to estimate a key from")
+    if harmony and any(harmony):
+        melody_total, harmony_total = sum(histogram), sum(harmony)
+        histogram = [m / melody_total + h / harmony_total for m, h in zip(histogram, harmony)]
 
     estimates = []
     for do in range(12):
@@ -161,6 +173,54 @@ def estimate_do(notes: list[KeyNote]) -> list[KeyEstimate]:
         minor_score = _correlation(rotated_minor, MINOR_PROFILE) + FINAL_NOTE_BONUS * (final_pc == la)
         estimates.append(KeyEstimate(do, minor_score > major_score, max(major_score, minor_score)))
     return sorted(estimates, key=lambda e: e.score, reverse=True)
+
+
+MAJOR_SCALE = (0, 2, 4, 5, 7, 9, 11)
+SI = 8  # raised so: the leading tone of a la-based minor key, so it is part of that key
+KEEP_CHROMATIC_SECONDS = 0.6
+KEEP_CHROMATIC_TOLERANCE = 0.25
+PASSING_SPAN = 4  # a passing step fills a third (do-re-mi); wider gaps are slides, not steps
+
+
+def scale_pitch_classes(do_pitch_class: int, minor: bool) -> set[int]:
+    steps = MAJOR_SCALE + ((SI,) if minor else ())
+    return {(do_pitch_class + s) % 12 for s in steps}
+
+
+def clean_slides(notes: list[KeyNote], do_pitch_class: int, minor: bool) -> list[KeyNote]:
+    """Move notes that land on a sharp/flat only because the singer slid into a note.
+
+    Singers scoop into notes and pass quickly between them; the transcriber
+    then reports pitches between two keys, which snap to a chromatic key
+    (e.g. "do ri mi" for a sung "do re mi"). An out-of-key note is moved to
+    the nearer in-key neighbour, unless it is held long and sung squarely on
+    the chromatic key, which suggests a deliberate chromatic note. If the
+    nearer neighbour would just repeat the previous or next note while the
+    other neighbour lies between them, and those two are at most a third
+    apart, the note is a passing step and goes to the other neighbour
+    ("mi ri do" becomes "mi re do", not "mi mi do").
+
+    Mirrored in player_template.html (cleanSlides) so changing do re-cleans.
+    """
+    scale = scale_pitch_classes(do_pitch_class, minor)
+    cleaned: list[KeyNote] = []
+    for i, note in enumerate(notes):
+        pitch = note.pitch_midi
+        held = note.end - note.start >= KEEP_CHROMATIC_SECONDS
+        centred = abs(note.tuned_pitch - pitch) <= KEEP_CHROMATIC_TOLERANCE
+        if pitch % 12 not in scale and not (held and centred):
+            below = next(p for p in range(pitch - 1, pitch - 13, -1) if p % 12 in scale)
+            above = next(p for p in range(pitch + 1, pitch + 13) if p % 12 in scale)
+            near, far = (below, above) if note.tuned_pitch - below <= above - note.tuned_pitch else (above, below)
+            prev = cleaned[-1].pitch_midi if cleaned else None
+            nxt = notes[i + 1].pitch_midi if i + 1 < len(notes) else None
+            passing = (prev is not None and nxt is not None and abs(prev - nxt) <= PASSING_SPAN
+                       and near in (prev, nxt) and min(prev, nxt) < far < max(prev, nxt))
+            if passing:
+                near = far
+            pitch = near
+        cleaned.append(KeyNote(note.start, note.end, pitch, note.raw_pitch, note.tuned_pitch))
+    return cleaned
 
 
 def home_do_midi(notes: list[KeyNote], do_pitch_class: int) -> int:
@@ -178,10 +238,10 @@ def octave_mark(octave: int) -> str:
     return "'" * octave if octave > 0 else "," * -octave
 
 
-def label_solfa(notes: list[KeyNote], do_pitch_class: int) -> list[SolfaKeyNote]:
+def label_solfa(notes: list[KeyNote], do_pitch_class: int, minor: bool = False) -> list[SolfaKeyNote]:
     home = home_do_midi(notes, do_pitch_class)
     labelled = []
-    for note in notes:
+    for exact, note in zip(notes, clean_slides(notes, do_pitch_class, minor)):
         mapping = pitch_to_solfa(note.pitch_midi, home, mode="major")
         labelled.append(SolfaKeyNote(
             start=note.start,
@@ -191,6 +251,8 @@ def label_solfa(notes: list[KeyNote], do_pitch_class: int) -> list[SolfaKeyNote]
             octave_mark=octave_mark(mapping.octave),
             key_name=key_name(note.pitch_midi),
             raw_pitch=note.raw_pitch,
+            tuned_pitch=round(note.tuned_pitch, 3),
+            exact_pitch_midi=exact.pitch_midi,
         ))
     return labelled
 
@@ -199,6 +261,7 @@ def to_solfa(
     raw_notes: list[RawNote],
     do_pitch_class: int | None = None,
     min_duration: float = 0.07,
+    harmony: list[float] | None = None,
 ) -> dict:
     """Full keyboard post-processing; returns a JSON-serialisable result."""
     offset = estimate_tuning_offset(raw_notes)
@@ -206,18 +269,24 @@ def to_solfa(
     notes = snap_to_keys(raw_notes, curve, min_duration=min_duration)
     if not notes:
         raise ValueError("no playable notes were detected")
-    candidates = estimate_do(notes)
+    candidates = estimate_do(notes, harmony)
     chosen = do_pitch_class if do_pitch_class is not None else candidates[0].do_pitch_class
+    minor_by_do = [False] * 12
+    for c in candidates:
+        minor_by_do[c.do_pitch_class] = c.minor
     return {
         "tuning_offset_semitones": round(offset, 3),
         "tuning_drift_semitones": round(curve[-1] - curve[0], 2),
         "do": NOTE_NAMES[chosen],
         "do_pitch_class": chosen,
         "do_source": "user" if do_pitch_class is not None else "estimated",
+        "key_evidence": "melody + chords" if harmony and any(harmony) else "melody",
         "key_candidates": [
             {"do": NOTE_NAMES[c.do_pitch_class], "do_pitch_class": c.do_pitch_class,
              "minor": c.minor, "score": round(c.score, 3)}
             for c in candidates[:3]
         ],
-        "notes": [asdict(n) for n in label_solfa(notes, chosen)],
+        "minor": minor_by_do[chosen],
+        "minor_by_do": minor_by_do,  # lets the player re-clean slides when the user changes do
+        "notes": [asdict(n) for n in label_solfa(notes, chosen, minor_by_do[chosen])],
     }

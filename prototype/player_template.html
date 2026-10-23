@@ -42,6 +42,14 @@
   .note.active { background: var(--accent); color: #fff; }
   .note.active .key { color: #fff; }
   .note.active .bar { background: #fff; }
+  .note.cleaned .syl { text-decoration: underline dotted; text-underline-offset: 4px; }
+  .chord { font-size: 12px; min-height: 16px; color: var(--accent); white-space: nowrap; }
+  .chord span, .chordchip span { color: var(--muted); font-size: 11px; }
+  .note.active .chord, .note.active .chord span { color: #fff; }
+  .chordchip { align-self: center; cursor: pointer; font-size: 13px; color: var(--accent); padding: 2px 8px;
+               border: 1px solid var(--line); border-radius: 12px; margin: 0 2px; }
+  .wk.chordtone { background: #fbd5bd; }
+  .bk.chordtone { background: #9a4a1f; }
   .syl { font-size: 22px; font-weight: 600; letter-spacing: .01em; }
   .mark { font-size: 16px; }
   .key { font-size: 11px; color: var(--muted); }
@@ -67,6 +75,14 @@
       <option value="both" selected>Both</option>
     </select></label>
     <label>do = <select id="do"></select></label>
+    <label>Chords <select id="chordview">
+      <option value="show" selected>Show</option>
+      <option value="hide">Hide</option>
+    </select></label>
+    <label>Notes <select id="view">
+      <option value="keyboard" selected>Keyboard (slides cleaned)</option>
+      <option value="exact">Exact (as sung)</option>
+    </select></label>
     <label>Key names <select id="transpose">
       <option value="0">As recorded</option>
       <option value="c">Transposed so do = C</option>
@@ -93,44 +109,119 @@ let notes = DATA.notes;
 // Results from before progressive processing have no "complete" flag; they are finished.
 const isComplete = () => DATA.complete !== false;
 let doPc = DATA.do_pitch_class, userDo = false, keyNotice = "";
-let transposeToC = false, els = [], activeIdx = -1;
+let transposeToC = false, els = [], activeIdx = -1, exactView = false, pitches = [];
+let showChords = true, activeChord = -1;
+const ROMAN = ["I", "bII", "II", "bIII", "III", "IV", "#IV", "V", "bVI", "VI", "bVII", "VII"];  // as chords.py
+const CHORD_ATTACH_SECONDS = 0.4;  // a chord this close before a note is written above that note
 synth.src = DATA.synth_file || "synth.wav";
 
+const exactPitch = n => n.exact_pitch_midi ?? n.pitch_midi;  // older results have no cleanup fields
 function homeDo(pc) {
   if (!notes.length || pc === null) return 60;
-  const p = notes.map(n => n.pitch_midi).sort((a, b) => a - b);
+  const p = notes.map(exactPitch).sort((a, b) => a - b);
   const median = p[Math.floor(p.length / 2)];
   return median - (((median - pc) % 12) + 12) % 12;
 }
 function shift() { if (!transposeToC) return 0; const s = (12 - doPc) % 12; return s > 6 ? s - 12 : s; }
 function keyName(m) { m += shift(); return NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1); }
-function label(n, home) {
-  const rel = n.pitch_midi - home, oct = Math.floor(rel / 12);
+// Mirrors clean_slides() in keyboard.py: out-of-key notes that come from sliding into a
+// note move to the nearer in-key neighbour; held, squarely sung chromatics are kept;
+// a passing step within a third goes to the neighbour between its two neighbours.
+const MAJOR_SCALE = [0, 2, 4, 5, 7, 9, 11], SI = 8, PASSING_SPAN = 4;
+const KEEP_CHROMATIC_SECONDS = 0.6, KEEP_CHROMATIC_TOLERANCE = 0.25;
+function cleanSlides(pc, minor) {
+  const scale = new Set(MAJOR_SCALE.concat(minor ? [SI] : []).map(s => (pc + s) % 12));
+  const inKey = p => scale.has(((p % 12) + 12) % 12), out = [];
+  notes.forEach((n, i) => {
+    let p = exactPitch(n);
+    if (n.tuned_pitch === undefined) { out.push(n.pitch_midi); return; }
+    const held = n.end - n.start >= KEEP_CHROMATIC_SECONDS;
+    const centred = Math.abs(n.tuned_pitch - p) <= KEEP_CHROMATIC_TOLERANCE;
+    if (!inKey(p) && !(held && centred)) {
+      let below = p - 1, above = p + 1;
+      while (!inKey(below)) below--;
+      while (!inKey(above)) above++;
+      let [near, far] = n.tuned_pitch - below <= above - n.tuned_pitch ? [below, above] : [above, below];
+      const prev = out.length ? out[out.length - 1] : null;
+      const next = i + 1 < notes.length ? exactPitch(notes[i + 1]) : null;
+      if (prev !== null && next !== null && Math.abs(prev - next) <= PASSING_SPAN &&
+          (near === prev || near === next) && Math.min(prev, next) < far && far < Math.max(prev, next)) near = far;
+      p = near;
+    }
+    out.push(p);
+  });
+  return out;
+}
+function computePitches() {
+  if (exactView || doPc === null) return notes.map(exactPitch);
+  const minor = DATA.minor_by_do ? DATA.minor_by_do[doPc] : false;
+  return cleanSlides(doPc, minor);
+}
+function label(p, home) {
+  const rel = p - home, oct = Math.floor(rel / 12);
   return { syl: SYL[((rel % 12) + 12) % 12], mark: oct > 0 ? "'".repeat(oct) : ",".repeat(-oct) };
 }
 function fmt(t) { return Math.floor(t / 60) + ":" + String(Math.floor(t % 60)).padStart(2, "0"); }
 
+const chordList = () => (showChords && DATA.chords) ? DATA.chords : [];
+function chordName(c) { return NAMES[(((c.root + shift()) % 12) + 12) % 12] + (c.quality === "min" ? "m" : ""); }
+function chordNumeral(c) {
+  if (doPc === null) return "";
+  const degree = ROMAN[(((c.root - doPc) % 12) + 12) % 12];
+  return c.quality === "min" ? degree.toLowerCase() : degree;
+}
+function chordChip(c) {
+  const el = document.createElement("div"); el.className = "chordchip";
+  el.innerHTML = `<b>${chordName(c)}</b> <span>${chordNumeral(c)}</span>`;
+  el.title = `Chord from ${c.start.toFixed(1)}s (no singing here)`; el.onclick = () => seek(c.start);
+  return el;
+}
+
 function render() {
   const sheet = document.getElementById("sheet"), home = homeDo(doPc);
-  sheet.innerHTML = ""; els = []; activeIdx = -1;
-  let phrase = null, prevEnd = -1, count = 0;
+  sheet.innerHTML = ""; els = []; activeIdx = -1; activeChord = -1; pitches = computePitches();
+  const chords = chordList();
+  let phrase = null, prevEnd = -1, count = 0, ci = 0;
+  const newPhrase = t => {
+    phrase = document.createElement("div"); phrase.className = "phrase";
+    const label = document.createElement("div"); label.className = "time"; label.textContent = fmt(t);
+    phrase.appendChild(label); sheet.appendChild(phrase); count = 0;
+  };
+  // Chords before the first sung note (an intro) get their own line.
+  if (chords.length && (!notes.length || chords[0].start < notes[0].start - CHORD_ATTACH_SECONDS)) {
+    newPhrase(chords[0].start);
+    while (ci < chords.length && (!notes.length || chords[ci].start < notes[0].start - CHORD_ATTACH_SECONDS))
+      phrase.appendChild(chordChip(chords[ci++]));
+    phrase = null;
+  }
   notes.forEach((n, i) => {
     const gap = n.start - prevEnd;
     if (!phrase || gap > 0.6 || count >= 18) {
-      phrase = document.createElement("div"); phrase.className = "phrase";
-      const t = document.createElement("div"); t.className = "time"; t.textContent = fmt(n.start);
-      phrase.appendChild(t); sheet.appendChild(phrase); count = 0;
+      newPhrase(n.start);
     } else if (gap > 0.25) {
       const r = document.createElement("span"); r.className = "rest"; r.textContent = "–"; phrase.appendChild(r);
     }
-    const { syl, mark } = label(n, home), d = n.end - n.start;
-    const el = document.createElement("div"); el.className = "note";
-    el.innerHTML = `<div><span class="syl">${syl}</span><span class="mark">${mark}</span></div>` +
-      `<div class="bar" style="width:${Math.min(60, 8 + d * 40)}px"></div><div class="key">${keyName(n.pitch_midi)}</div>`;
-    el.title = `${n.start.toFixed(2)}s – ${n.end.toFixed(2)}s (${d.toFixed(2)}s)`;
+    let above = null;  // the chord written above this note, if one starts here
+    while (ci < chords.length && chords[ci].start <= n.start + CHORD_ATTACH_SECONDS) {
+      const c = chords[ci++];
+      if (n.start - c.start <= CHORD_ATTACH_SECONDS) above = c;
+      else phrase.appendChild(chordChip(c));  // changed in a gap with no singing
+    }
+    const { syl, mark } = label(pitches[i], home), d = n.end - n.start;
+    const el = document.createElement("div");
+    el.className = "note" + (pitches[i] !== exactPitch(n) ? " cleaned" : "");
+    el.innerHTML = (chords.length ? `<div class="chord">${above ? `<b>${chordName(above)}</b> <span>${chordNumeral(above)}</span>` : "&nbsp;"}</div>` : "") +
+      `<div><span class="syl">${syl}</span><span class="mark">${mark}</span></div>` +
+      `<div class="bar" style="width:${Math.min(60, 8 + d * 40)}px"></div><div class="key">${keyName(pitches[i])}</div>`;
+    el.title = `${n.start.toFixed(2)}s – ${n.end.toFixed(2)}s (${d.toFixed(2)}s)` +
+      (pitches[i] !== exactPitch(n) ? ` · sung as ${keyName(exactPitch(n))}, cleaned as a slide` : "");
     el.onclick = () => seek(n.start);
     phrase.appendChild(el); els.push(el); prevEnd = n.end; count++;
   });
+  if (ci < chords.length) {  // chords after the last sung note (an outro, or not transcribed yet)
+    if (!phrase) newPhrase(chords[ci].start);
+    while (ci < chords.length) phrase.appendChild(chordChip(chords[ci++]));
+  }
   if (!isComplete()) {
     const w = document.createElement("div"); w.className = "pending";
     w.textContent = notes.length
@@ -153,7 +244,7 @@ function render() {
 let pianoKeys = {};
 function buildPiano() {
   const piano = document.getElementById("piano"); piano.innerHTML = ""; pianoKeys = {};
-  const p = notes.length ? notes.map(n => n.pitch_midi + shift()) : [60, 71];
+  const p = notes.length ? pitches.map(m => m + shift()) : [60, 71];
   let lo = Math.min(...p), hi = Math.max(...p);
   lo -= ((lo % 12) + 12) % 12; hi += 11 - ((hi % 12) + 12) % 12;
   const whites = []; for (let m = lo; m <= hi; m++) if (!NAMES[m % 12].includes("#")) whites.push(m);
@@ -187,6 +278,8 @@ document.getElementById("seek").oninput = e => seek(+e.target.value);
 document.getElementById("source").onchange = applySource;
 document.getElementById("rate").onchange = e => { song.playbackRate = synth.playbackRate = +e.target.value; };
 document.getElementById("transpose").onchange = e => { transposeToC = e.target.value === "c"; render(); };
+document.getElementById("view").onchange = e => { exactView = e.target.value === "exact"; render(); };
+document.getElementById("chordview").onchange = e => { showChords = e.target.value === "show"; render(); };
 const doSel = document.getElementById("do");
 doSel.add(new Option("…", ""));
 NAMES.forEach((n, i) => doSel.add(new Option(n, i)));
@@ -238,11 +331,26 @@ function tick(force) {
     if (notes[i].start > t) break;
     if (t < notes[i].end) { idx = i; break; }
   }
+  const chords = chordList();
+  let ch = -1;
+  for (let i = 0; i < chords.length; i++) { if (chords[i].start > t) break; if (t < chords[i].end) { ch = i; break; } }
+  if (ch !== activeChord) {  // light the chord's notes in the lowest octave of the mini keyboard
+    Object.values(pianoKeys).forEach(k => k.classList.remove("chordtone"));
+    if (ch >= 0) {
+      const lowest = Math.min(...Object.keys(pianoKeys).map(Number));
+      const tones = chords[ch].quality === "min" ? [0, 3, 7] : [0, 4, 7];
+      tones.forEach(iv => {
+        const pc = (((chords[ch].root + shift() + iv) % 12) + 12) % 12;
+        const k = pianoKeys[lowest + ((pc - lowest % 12) + 12) % 12]; if (k) k.classList.add("chordtone");
+      });
+    }
+    activeChord = ch;
+  }
   if (idx !== activeIdx) {
     if (activeIdx >= 0) { els[activeIdx].classList.remove("active");
-      const k = pianoKeys[notes[activeIdx].pitch_midi + shift()]; if (k) k.classList.remove("on"); }
+      const k = pianoKeys[pitches[activeIdx] + shift()]; if (k) k.classList.remove("on"); }
     if (idx >= 0) { els[idx].classList.add("active");
-      const k = pianoKeys[notes[idx].pitch_midi + shift()]; if (k) k.classList.add("on");
+      const k = pianoKeys[pitches[idx] + shift()]; if (k) k.classList.add("on");
       const r = els[idx].getBoundingClientRect();
       if (r.top < 200 || r.bottom > innerHeight - 40) els[idx].scrollIntoView({ block: "center", behavior: "smooth" }); }
     activeIdx = idx;

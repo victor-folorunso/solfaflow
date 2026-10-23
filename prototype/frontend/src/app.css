@@ -1,0 +1,225 @@
+/* SolfaFlow design tokens.
+   Indigo is the brand and the music stand; lamp yellow is reserved for "now playing"
+   (the current syllable and key) and is never used as decoration. */
+:root {
+	--indigo: #1e2350;
+	--indigo-soft: #e4e6f4;
+	--paper: #f6f7fb;
+	--surface: #ffffff;
+	--ivory: #fffdf6;
+	--lamp: #ffc62b;
+	--lamp-ink: #1e2350;
+	--ink: #1e2350;
+	--slate: #5e6382;
+	--rule: #d9dbe8;
+	--danger: #b42318;
+	--focus: #3b5bdb;
+
+	--font-display: 'Bricolage Grotesque Variable', 'Segoe UI', system-ui, sans-serif;
+	--font-body: 'Atkinson Hyperlegible Next', 'Segoe UI', system-ui, sans-serif;
+
+	/* Type scale: ratio 1.25 from a 17px body. */
+	--step--1: 0.8125rem;
+	--step-0: 1.0625rem;
+	--step-1: 1.3125rem;
+	--step-2: 1.65rem;
+	--step-3: 2.0625rem;
+	--step-4: 2.575rem;
+	--step-5: 3.225rem;
+
+	--space-1: 0.25rem;
+	--space-2: 0.5rem;
+	--space-3: 0.75rem;
+	--space-4: 1rem;
+	--space-5: 1.5rem;
+	--space-6: 2rem;
+	--space-7: 3rem;
+	--space-8: 4.5rem;
+
+	--radius-control: 10px;
+	--radius-panel: 18px;
+	--page: 72rem;
+	--measure: 66ch;
+	color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--indigo: #8f9cff;
+		--indigo-soft: #262a52;
+		--paper: #12152e;
+		--surface: #1a1e3f;
+		--ivory: #f3f1e8;
+		--ink: #eceef8;
+		--slate: #a3a8c6;
+		--rule: #2e3360;
+		--danger: #ff8a80;
+		--focus: #a5b4ff;
+		color-scheme: dark;
+	}
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	-webkit-text-size-adjust: 100%;
+}
+
+body {
+	margin: 0;
+	background: var(--paper);
+	color: var(--ink);
+	font: 400 var(--step-0) / 1.55 var(--font-body);
+	text-rendering: optimizeLegibility;
+}
+
+h1,
+h2,
+h3 {
+	font-family: var(--font-display);
+	font-weight: 700;
+	line-height: 1.1;
+	letter-spacing: -0.015em;
+	margin: 0 0 var(--space-4);
+	text-wrap: balance;
+}
+
+h1 {
+	font-size: clamp(var(--step-3), 5.5vw, var(--step-5));
+	font-stretch: 85%;
+}
+
+h2 {
+	font-size: clamp(var(--step-2), 3.5vw, var(--step-3));
+}
+
+h3 {
+	font-size: var(--step-1);
+}
+
+p,
+li {
+	max-width: var(--measure);
+}
+
+p {
+	margin: 0 0 var(--space-4);
+}
+
+a {
+	color: inherit;
+	text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+	text-underline-offset: 0.2em;
+}
+
+a:hover {
+	text-decoration-color: currentColor;
+}
+
+:focus-visible {
+	outline: 3px solid var(--focus);
+	outline-offset: 2px;
+	border-radius: 4px;
+}
+
+button,
+input,
+select {
+	font: inherit;
+	color: inherit;
+}
+
+.wrap {
+	width: min(100% - 2rem, var(--page));
+	margin-inline: auto;
+}
+
+.button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-2);
+	min-height: 48px;
+	padding: 0 var(--space-5);
+	border: 0;
+	border-radius: var(--radius-control);
+	background: var(--indigo);
+	color: #fff;
+	font-weight: 700;
+	text-decoration: none;
+	cursor: pointer;
+}
+
+@media (prefers-color-scheme: dark) {
+	.button {
+		color: #12152e;
+	}
+}
+
+.button:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+.button.quiet {
+	background: transparent;
+	color: var(--ink);
+	box-shadow: inset 0 0 0 1.5px var(--rule);
+}
+
+.field {
+	display: grid;
+	gap: var(--space-1);
+	font-size: var(--step--1);
+	color: var(--slate);
+}
+
+.field select {
+	min-height: 44px;
+	padding: 0 var(--space-3);
+	border: 1.5px solid var(--rule);
+	border-radius: var(--radius-control);
+	background: var(--surface);
+	font-size: var(--step-0);
+	color: var(--ink);
+}
+
+.prose h2 {
+	margin-top: var(--space-7);
+}
+
+.prose ul,
+.prose ol {
+	padding-left: 1.25em;
+}
+
+.prose li + li {
+	margin-top: var(--space-2);
+}
+
+.solfa {
+	font-family: var(--font-display);
+	font-weight: 650;
+}
+
+.visually-hidden {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		transition-duration: 0.01ms !important;
+	}
+}

@@ -27,17 +27,21 @@ class VocalSeparator:
     def __init__(self) -> None:
         from audio_separator.separator import Separator
 
-        self._separator = Separator(model_file_dir=str(HERE / "models" / "separator"),
-                                    output_single_stem="Vocals")
+        # Both stems: the model computes the accompaniment anyway, and chords are read from it.
+        self._separator = Separator(model_file_dir=str(HERE / "models" / "separator"))
         self._separator.load_model(model_filename=SEPARATOR_MODEL)
 
-    def separate(self, mix_wav: Path, out_wav: Path) -> Path:
-        self._separator.output_dir = str(out_wav.parent)
+    def separate(self, mix_wav: Path, vocals_wav: Path, accompaniment_wav: Path) -> None:
+        self._separator.output_dir = str(vocals_wav.parent)
         if self._separator.model_instance is not None:
-            self._separator.model_instance.output_dir = str(out_wav.parent)
-        outputs = self._separator.separate(str(mix_wav))
-        shutil.move(out_wav.parent / Path(outputs[0]).name, out_wav)
-        return out_wav
+            self._separator.model_instance.output_dir = str(vocals_wav.parent)
+        # Stem names come from each model's config and differ in case ("(Vocals)", "(vocals)").
+        outputs = [Path(o).name for o in self._separator.separate(str(mix_wav))]
+        vocal = [name for name in outputs if "(vocals)" in name.lower()]
+        if len(vocal) != 1:
+            raise RuntimeError(f"Expected exactly one vocal stem from the separator, got: {outputs}")
+        for name in outputs:
+            shutil.move(vocals_wav.parent / name, vocals_wav if name == vocal[0] else accompaniment_wav)
 
 
 class GameTranscriber:

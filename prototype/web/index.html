@@ -135,11 +135,16 @@ function elapsed(job) {
   return `${m}:${String(s).padStart(2, "0")}`;
 }
 function clock(t) { return Math.floor(t / 60) + ":" + String(Math.floor(t % 60)).padStart(2, "0"); }
+// Tells apart several uploads of the same song.
+function when(job) {
+  return new Date(job.created * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
 function row(job) {
   let sub, right = "", bar = "";
   if (job.player_ready) right = `<a href="/results/${job.id}/player.html">Open</a>`;
   if (job.status === "done") {
-    sub = `do = ${job.do} · ${job.notes} notes` + (job.audio_seconds ? ` · ${clock(job.audio_seconds)} of audio` : "");
+    sub = `do = ${job.do} · ${job.notes} notes` + (job.audio_seconds ? ` · ${clock(job.audio_seconds)} of audio` : "") +
+      ` · ${when(job)}`;
   } else if (job.status === "error") {
     sub = `<span class="bad">Failed: ${job.error}</span>`;
   } else if (job.status === "queued") {
