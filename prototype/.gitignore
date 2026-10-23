@@ -1,0 +1,8 @@
+.venv/
+vendor/
+models/
+bin/
+output/
+samples/
+__pycache__/
+uploads/

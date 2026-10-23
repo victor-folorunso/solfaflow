@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolfaFlow</title>
+<style>
+  :root {
+    --bg: #faf8f4; --fg: #1d1b18; --muted: #77716a; --line: #e4dfd7;
+    --accent: #c2410c; --accent-soft: #fde5d6; --card: #ffffff; --ok: #15803d; --bad: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #171614; --fg: #f1ede6; --muted: #9c958c; --line: #2f2c28;
+            --accent: #fb923c; --accent-soft: #3a2416; --card: #1f1e1b; --ok: #4ade80; --bad: #f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 720px; margin: 0 auto; padding: 32px 16px 64px; }
+  h1 { font-size: 26px; margin: 0; letter-spacing: -.01em; }
+  .lede { color: var(--muted); margin: 4px 0 24px; }
+  #drop { display: block; border: 2px dashed var(--line); border-radius: 12px; padding: 32px 16px;
+          text-align: center; cursor: pointer; background: var(--card); transition: border-color .15s, background .15s; }
+  #drop.over, #drop:hover { border-color: var(--accent); background: var(--accent-soft); }
+  #drop strong { display: block; font-size: 17px; }
+  #drop span { color: var(--muted); font-size: 13px; }
+  #file { display: none; }
+  .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin: 16px 0; }
+  .opts label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  .opts label.check { flex-direction: row; align-items: center; gap: 8px; color: var(--fg); }
+  select, button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line);
+                   border-radius: 8px; padding: 8px 10px; }
+  button.go { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600;
+              width: 100%; padding: 12px; cursor: pointer; }
+  button.go:disabled { opacity: .5; cursor: default; }
+  .hint { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+  .err { color: var(--bad); font-size: 14px; margin: 8px 0 0; }
+  h2 { font-size: 15px; margin: 36px 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+  .job { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .job .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .job .sub { color: var(--muted); font-size: 13px; }
+  .job .grow { flex: 1; min-width: 0; }
+  .job a { color: #fff; background: var(--accent); text-decoration: none; padding: 6px 12px; border-radius: 8px; font-size: 14px; white-space: nowrap; }
+  .bar { height: 4px; border-radius: 2px; background: var(--line); margin-top: 6px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); transition: width .4s; }
+  .bad { color: var(--bad); }
+  .empty { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>SolfaFlow</h1>
+  <p class="lede">Upload a song and get its tune as tonic solfa you can play on the keyboard.</p>
+
+  <label id="drop" for="file">
+    <strong id="dropTitle">Choose a song or drop it here</strong>
+    <span id="dropSub">MP3, WAV, M4A, OGG, FLAC · up to 60 MB</span>
+  </label>
+  <input id="file" type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.opus,.flac,.webm,.mp4">
+
+  <div class="opts">
+    <label>How much of the song
+      <select id="seconds">
+        <option value="30">First 30 seconds</option>
+        <option value="60">First minute</option>
+        <option value="120">First 2 minutes</option>
+        <option value="0" selected>Whole song</option>
+      </select>
+    </label>
+    <label>Key (do =)
+      <select id="do"><option value="">Detect automatically</option></select>
+    </label>
+    <label class="check"><input id="solo" type="checkbox"> Voice only, no instruments</label>
+  </div>
+  <button class="go" id="go" disabled>Make solfa</button>
+  <p class="hint" id="estimate"></p>
+  <p class="err" id="error" hidden></p>
+
+  <h2>Your songs</h2>
+  <div id="jobs"><p class="empty">Nothing yet.</p></div>
+</main>
+<script>
+const NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+const STAGE_TEXT = { queued: "Waiting", decoding: "Reading the file", "loading models": "Starting up",
+                     transcribing: "Finding the notes", done: "Ready" };
+// Measured on this prototype's laptop CPU: separation ~11.5x and transcription ~6.7x the audio length.
+const SLOWDOWN = { full: 18, solo: 7 };
+const FIRST_CHUNK_SECONDS = 12 + 3;  // first chunk core plus its padding (chunking.py)
+const $ = id => document.getElementById(id);
+let chosen = null;
+
+NAMES.forEach(n => $("do").add(new Option(n, n)));
+
+function choose(file) {
+  chosen = file;
+  $("dropTitle").textContent = file ? file.name : "Choose a song or drop it here";
+  $("dropSub").textContent = file ? (file.size / 1048576).toFixed(1) + " MB · click to change" : "MP3, WAV, M4A, OGG, FLAC · up to 60 MB";
+  $("go").disabled = !file;
+  estimate();
+}
+function estimate() {
+  const s = +$("seconds").value;
+  const factor = $("solo").checked ? SLOWDOWN.solo : SLOWDOWN.full;
+  const first = Math.max(1, Math.round((FIRST_CHUNK_SECONDS * factor + 30) / 60));
+  $("estimate").textContent = `The song plays right away. The first solfa appears in about ${first} minutes on this ` +
+    `computer, then keeps filling in ahead of you` + (s ? ` (all of it in about ${Math.round(s * factor / 60)} minutes).` : ".");
+}
+$("file").onchange = e => choose(e.target.files[0] || null);
+$("seconds").onchange = estimate; $("solo").onchange = estimate;
+const drop = $("drop");
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => e.dataTransfer.files[0] && choose(e.dataTransfer.files[0]));
+
+$("go").onclick = async () => {
+  $("error").hidden = true; $("go").disabled = true; $("go").textContent = "Uploading…";
+  const body = new FormData();
+  body.append("file", chosen); body.append("seconds", $("seconds").value);
+  body.append("do", $("do").value); body.append("skip_separation", $("solo").checked);
+  try {
+    const res = await fetch("/api/jobs", { method: "POST", body });
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    choose(null); $("file").value = "";
+    refresh();
+  } catch (err) {
+    $("error").textContent = "Upload failed: " + err.message; $("error").hidden = false;
+    $("go").disabled = false;
+  }
+  $("go").textContent = "Make solfa";
+};
+
+function elapsed(job) {
+  const end = job.finished || Date.now() / 1000, start = job.started || job.created;
+  const m = Math.floor((end - start) / 60), s = Math.floor((end - start) % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+function clock(t) { return Math.floor(t / 60) + ":" + String(Math.floor(t % 60)).padStart(2, "0"); }
+function row(job) {
+  let sub, right = "", bar = "";
+  if (job.player_ready) right = `<a href="/results/${job.id}/player.html">Open</a>`;
+  if (job.status === "done") {
+    sub = `do = ${job.do} · ${job.notes} notes` + (job.audio_seconds ? ` · ${clock(job.audio_seconds)} of audio` : "");
+  } else if (job.status === "error") {
+    sub = `<span class="bad">Failed: ${job.error}</span>`;
+  } else if (job.status === "queued") {
+    sub = `Waiting in line (position ${job.queue_position})`;
+  } else {
+    const done = job.processed_seconds || 0, total = job.total_seconds || 0;
+    sub = total
+      ? `Solfa ready up to ${clock(done)} of ${clock(total)} · ${STAGE_TEXT[job.stage] || job.stage}` +
+        (job.chunks ? ` (part ${job.chunk || 0} of ${job.chunks})` : "") + ` · ${elapsed(job)} elapsed`
+      : `${STAGE_TEXT[job.stage] || job.stage} · ${elapsed(job)} elapsed`;
+    const pct = total ? Math.round(100 * done / total) : 0;
+    bar = `<div class="bar"><i style="width:${pct}%"></i></div>`;
+  }
+  return `<div class="job"><div class="grow"><div class="name"></div><div class="sub">${sub}</div>${bar}</div>${right}</div>`;
+}
+async function refresh() {
+  let list;
+  try { list = await (await fetch("/api/jobs")).json(); }
+  catch (err) { return; }  // server restarting or offline; the next tick retries
+  const box = $("jobs");
+  if (!list.length) { box.innerHTML = '<p class="empty">Nothing yet.</p>'; return; }
+  box.innerHTML = list.map(row).join("");
+  box.querySelectorAll(".name").forEach((el, i) => el.textContent = list[i].name);
+}
+refresh(); setInterval(refresh, 2000);
+estimate();
+</script>
+</body>
+</html>

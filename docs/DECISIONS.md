@@ -12,6 +12,14 @@ This log separates established choices from provisional implementation details a
 - **Engineering preference:** reuse and rigorously evaluate strong existing engines instead of writing an unproven transcription model from scratch.
 - **Handoff requirement:** repository documentation should capture the product idea, prior reasoning, existing scaffold, candidate models, limitations, and next steps so another AI can resume quickly.
 
+## Scope decisions (product owner, 2026-10-22)
+
+- **Target user:** keyboard/piano players who want to play a song's tune from tonic solfa. Not choirs.
+- **Output:** the main melody only (usually the lead vocal), one note at a time, snapped to keyboard keys (semitones), with held-note durations.
+- **Price:** free or near-free (not open source). Paid competitors exist; low running cost is a hard constraint, so prefer CPU/on-device inference.
+- **No shared library** of transcriptions: user uploads a song and gets solfa for their own use.
+- Keyboard-specific needs: global tuning-offset correction before snapping to keys, octave marks, showing which key is "do", optional transpose (e.g. to C), and dropping notes too short to play.
+
 ## Provisional code choices (not product-final)
 
 - Backend scaffold uses Python 3.11+, FastAPI, Pydantic, Uvicorn, pytest.

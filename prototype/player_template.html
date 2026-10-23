@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__ · SolfaFlow</title>
+<style>
+  :root {
+    --bg: #faf8f4; --fg: #1d1b18; --muted: #77716a; --line: #e4dfd7;
+    --accent: #c2410c; --accent-soft: #fde5d6; --low: #a8a29e; --card: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #171614; --fg: #f1ede6; --muted: #9c958c; --line: #2f2c28;
+            --accent: #fb923c; --accent-soft: #3a2416; --low: #57534e; --card: #1f1e1b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { position: sticky; top: 0; z-index: 2; background: var(--bg);
+           border-bottom: 1px solid var(--line); padding: 12px 16px; }
+  h1 { font-size: 17px; margin: 0 0 8px; font-weight: 600; }
+  h1 a { color: var(--muted); text-decoration: none; font-weight: 400; margin-right: 8px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  .controls label { color: var(--muted); font-size: 13px; display: flex; gap: 6px; align-items: center; }
+  select, button { font: inherit; color: var(--fg); background: var(--card); border: 1px solid var(--line);
+                   border-radius: 6px; padding: 4px 8px; }
+  button.play { background: var(--accent); color: #fff; border-color: var(--accent); min-width: 72px; }
+  .meta { color: var(--muted); font-size: 12px; margin-top: 6px; }
+  #seek { flex: 1 1 200px; accent-color: var(--accent); }
+  #piano { position: relative; height: 70px; margin: 10px 0 0; overflow: hidden; }
+  .wk, .bk { position: absolute; top: 0; border-radius: 0 0 4px 4px; }
+  /* Keys keep piano colours in both themes so they read as a real keyboard. */
+  .wk { height: 70px; background: #f7f4ee; border: 1px solid #cfc8bd; }
+  .bk { height: 42px; background: #1d1b18; z-index: 1; }
+  .wk.on, .bk.on { background: var(--accent); }
+  .wk span { position: absolute; bottom: 3px; width: 100%; text-align: center; font-size: 10px; color: #77716a; }
+  main { padding: 12px 16px 80px; max-width: 1100px; margin: 0 auto; }
+  .phrase { display: flex; flex-wrap: wrap; gap: 4px; align-items: flex-end; padding: 10px 0;
+            border-bottom: 1px dashed var(--line); }
+  .note { cursor: pointer; padding: 4px 6px 3px; border-radius: 6px; min-width: 34px; text-align: center; }
+  .note:hover { background: var(--accent-soft); }
+  .note.active { background: var(--accent); color: #fff; }
+  .note.active .key { color: #fff; }
+  .note.active .bar { background: #fff; }
+  .syl { font-size: 22px; font-weight: 600; letter-spacing: .01em; }
+  .mark { font-size: 16px; }
+  .key { font-size: 11px; color: var(--muted); }
+  .bar { height: 3px; background: var(--accent); border-radius: 2px; margin: 3px auto 0; opacity: .7; }
+  .rest { color: var(--low); font-size: 18px; padding: 0 4px 18px; }
+  .time { color: var(--muted); font-size: 11px; width: 100%; }
+  #ready { height: 3px; background: var(--line); border-radius: 2px; margin-top: 8px; overflow: hidden; }
+  #ready i { display: block; height: 100%; background: var(--accent); opacity: .6; transition: width .4s; }
+  #status { margin-top: 8px; padding: 6px 10px; border-radius: 6px; background: var(--accent-soft); font-size: 13px; }
+  .pending { color: var(--muted); padding: 16px 0; font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1><a id="back" href="/" hidden>← Songs</a> __TITLE__</h1>
+  <div class="controls">
+    <button class="play" id="play">Play</button>
+    <input id="seek" type="range" min="0" step="0.01" value="0">
+    <span id="clock" class="meta">0:00</span>
+    <label>Hear <select id="source">
+      <option value="song">Original song</option>
+      <option value="synth">Detected notes</option>
+      <option value="both" selected>Both</option>
+    </select></label>
+    <label>do = <select id="do"></select></label>
+    <label>Key names <select id="transpose">
+      <option value="0">As recorded</option>
+      <option value="c">Transposed so do = C</option>
+    </select></label>
+    <label>Speed <select id="rate">
+      <option>0.5</option><option>0.75</option><option selected>1</option>
+    </select></label>
+  </div>
+  <div id="piano"></div>
+  <div id="ready" title="How far the solfa is ready"><i></i></div>
+  <div class="meta" id="info"></div>
+  <div id="status" hidden></div>
+</header>
+<main id="sheet"></main>
+<audio id="song" src="song.wav" preload="auto"></audio>
+<audio id="synth" preload="auto"></audio>
+<script>
+let DATA = /*SOLFA_DATA*/null;
+const NAMES = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+// Same convention as backend/solfaflow/solfa.py (major, raised chromatics).
+const SYL = ["do","di","re","ri","mi","fa","fi","so","si","la","li","ti"];
+const song = document.getElementById("song"), synth = document.getElementById("synth");
+let notes = DATA.notes;
+// Results from before progressive processing have no "complete" flag; they are finished.
+const isComplete = () => DATA.complete !== false;
+let doPc = DATA.do_pitch_class, userDo = false, keyNotice = "";
+let transposeToC = false, els = [], activeIdx = -1;
+synth.src = DATA.synth_file || "synth.wav";
+
+function homeDo(pc) {
+  if (!notes.length || pc === null) return 60;
+  const p = notes.map(n => n.pitch_midi).sort((a, b) => a - b);
+  const median = p[Math.floor(p.length / 2)];
+  return median - (((median - pc) % 12) + 12) % 12;
+}
+function shift() { if (!transposeToC) return 0; const s = (12 - doPc) % 12; return s > 6 ? s - 12 : s; }
+function keyName(m) { m += shift(); return NAMES[((m % 12) + 12) % 12] + (Math.floor(m / 12) - 1); }
+function label(n, home) {
+  const rel = n.pitch_midi - home, oct = Math.floor(rel / 12);
+  return { syl: SYL[((rel % 12) + 12) % 12], mark: oct > 0 ? "'".repeat(oct) : ",".repeat(-oct) };
+}
+function fmt(t) { return Math.floor(t / 60) + ":" + String(Math.floor(t % 60)).padStart(2, "0"); }
+
+function render() {
+  const sheet = document.getElementById("sheet"), home = homeDo(doPc);
+  sheet.innerHTML = ""; els = []; activeIdx = -1;
+  let phrase = null, prevEnd = -1, count = 0;
+  notes.forEach((n, i) => {
+    const gap = n.start - prevEnd;
+    if (!phrase || gap > 0.6 || count >= 18) {
+      phrase = document.createElement("div"); phrase.className = "phrase";
+      const t = document.createElement("div"); t.className = "time"; t.textContent = fmt(n.start);
+      phrase.appendChild(t); sheet.appendChild(phrase); count = 0;
+    } else if (gap > 0.25) {
+      const r = document.createElement("span"); r.className = "rest"; r.textContent = "–"; phrase.appendChild(r);
+    }
+    const { syl, mark } = label(n, home), d = n.end - n.start;
+    const el = document.createElement("div"); el.className = "note";
+    el.innerHTML = `<div><span class="syl">${syl}</span><span class="mark">${mark}</span></div>` +
+      `<div class="bar" style="width:${Math.min(60, 8 + d * 40)}px"></div><div class="key">${keyName(n.pitch_midi)}</div>`;
+    el.title = `${n.start.toFixed(2)}s – ${n.end.toFixed(2)}s (${d.toFixed(2)}s)`;
+    el.onclick = () => seek(n.start);
+    phrase.appendChild(el); els.push(el); prevEnd = n.end; count++;
+  });
+  if (!isComplete()) {
+    const w = document.createElement("div"); w.className = "pending";
+    w.textContent = notes.length
+      ? `Working out the notes after ${fmt(DATA.processed_seconds)}…`
+      : DATA.processed_seconds > 0
+        ? `No singing found up to ${fmt(DATA.processed_seconds)} (probably an instrumental intro). Working on the next part…`
+        : "Working out the first notes… The song can already be played.";
+    sheet.appendChild(w);
+  }
+  buildPiano();
+  document.getElementById("info").textContent = doPc === null ? "" :
+    `do = ${NAMES[doPc]} (${userDo ? "your choice" : DATA.do_source + (isComplete() ? "" : ", may still change")}) · ` +
+    `${notes.length} notes · tuning offset ${DATA.tuning_offset_semitones >= 0 ? "+" : ""}${DATA.tuning_offset_semitones} semitones · ` +
+    `best key guesses: ${DATA.key_candidates.map(c => "do=" + c.do + (c.minor ? " (minor, la-based)" : "")).join(", ")}`;
+  const ready = document.querySelector("#ready i");
+  ready.style.width = (isComplete() ? 100 : 100 * DATA.processed_seconds / DATA.duration) + "%";
+  document.getElementById("ready").hidden = isComplete();
+}
+
+let pianoKeys = {};
+function buildPiano() {
+  const piano = document.getElementById("piano"); piano.innerHTML = ""; pianoKeys = {};
+  const p = notes.length ? notes.map(n => n.pitch_midi + shift()) : [60, 71];
+  let lo = Math.min(...p), hi = Math.max(...p);
+  lo -= ((lo % 12) + 12) % 12; hi += 11 - ((hi % 12) + 12) % 12;
+  const whites = []; for (let m = lo; m <= hi; m++) if (!NAMES[m % 12].includes("#")) whites.push(m);
+  const w = Math.max(14, Math.min(34, piano.clientWidth / whites.length));
+  whites.forEach((m, i) => {
+    const k = document.createElement("div"); k.className = "wk";
+    k.style.left = i * w + "px"; k.style.width = w + "px";
+    if (m % 12 === 0) k.innerHTML = `<span>C${m / 12 - 1}</span>`;
+    piano.appendChild(k); pianoKeys[m] = k;
+    if (m + 1 <= hi && NAMES[(m + 1) % 12].includes("#")) {
+      const b = document.createElement("div"); b.className = "bk";
+      b.style.left = (i + 1) * w - w * 0.3 + "px"; b.style.width = w * 0.6 + "px";
+      piano.appendChild(b); pianoKeys[m + 1] = b;
+    }
+  });
+}
+
+function seek(t) { song.currentTime = t; synth.currentTime = t; tick(true); }
+function applySource() {
+  const s = document.getElementById("source").value;
+  song.muted = s === "synth"; synth.muted = s === "song";
+}
+document.getElementById("play").onclick = () => {
+  if (song.paused) { synth.currentTime = song.currentTime; song.play(); synth.play(); }
+  else { song.pause(); synth.pause(); }
+};
+song.onplay = () => document.getElementById("play").textContent = "Pause";
+song.onpause = () => document.getElementById("play").textContent = "Play";
+song.onloadedmetadata = () => document.getElementById("seek").max = song.duration;
+document.getElementById("seek").oninput = e => seek(+e.target.value);
+document.getElementById("source").onchange = applySource;
+document.getElementById("rate").onchange = e => { song.playbackRate = synth.playbackRate = +e.target.value; };
+document.getElementById("transpose").onchange = e => { transposeToC = e.target.value === "c"; render(); };
+const doSel = document.getElementById("do");
+doSel.add(new Option("…", ""));
+NAMES.forEach((n, i) => doSel.add(new Option(n, i)));
+doSel.value = doPc ?? "";
+doSel.onchange = e => {
+  if (e.target.value === "") return;
+  doPc = +e.target.value; userDo = true; keyNotice = ""; showStatus(); render();
+};
+
+// While the song is still being transcribed, pick up each newly finished part.
+function apply(next) {
+  const prevDo = doPc;
+  DATA = next; notes = next.notes;
+  if (!userDo) {
+    doPc = next.do_pitch_class; doSel.value = doPc ?? "";
+    if (prevDo !== null && doPc !== null && doPc !== prevDo)
+      keyNotice = `Key updated to do = ${NAMES[doPc]} now that more of the song is done. You can change it above.`;
+    setTimeout(() => { keyNotice = ""; showStatus(); }, 12000);
+  }
+  const at = song.currentTime, playing = !song.paused;
+  synth.src = next.synth_file;
+  synth.onloadedmetadata = () => { synth.currentTime = song.currentTime || at; if (playing && !song.paused) synth.play(); };
+  render(); showStatus();
+}
+async function poll() {
+  if (isComplete() || !location.protocol.startsWith("http")) return;
+  try {
+    const next = await (await fetch("solfa.json?t=" + Date.now(), { cache: "no-store" })).json();
+    if (next.version > (DATA.version ?? 0)) apply(next);
+  } catch (err) { /* the file is being replaced; try again next time */ }
+  if (!isComplete()) setTimeout(poll, 3000);
+}
+function showStatus() {
+  const box = document.getElementById("status");
+  let text = keyNotice;
+  if (!isComplete() && song.currentTime > DATA.processed_seconds)
+    text = `You're ahead of the transcription (ready up to ${fmt(DATA.processed_seconds)}). Notes for this part are on the way.`;
+  box.textContent = text; box.hidden = !text;
+}
+
+function tick(force) {
+  const t = song.currentTime;
+  if (Math.abs(synth.currentTime - t) > 0.08 && !song.paused) synth.currentTime = t;
+  document.getElementById("clock").textContent = fmt(t);
+  if (!force) document.getElementById("seek").value = t;
+  if (!isComplete()) showStatus();
+  let idx = -1;
+  for (let i = 0; i < notes.length; i++) {
+    if (notes[i].start > t) break;
+    if (t < notes[i].end) { idx = i; break; }
+  }
+  if (idx !== activeIdx) {
+    if (activeIdx >= 0) { els[activeIdx].classList.remove("active");
+      const k = pianoKeys[notes[activeIdx].pitch_midi + shift()]; if (k) k.classList.remove("on"); }
+    if (idx >= 0) { els[idx].classList.add("active");
+      const k = pianoKeys[notes[idx].pitch_midi + shift()]; if (k) k.classList.add("on");
+      const r = els[idx].getBoundingClientRect();
+      if (r.top < 200 || r.bottom > innerHeight - 40) els[idx].scrollIntoView({ block: "center", behavior: "smooth" }); }
+    activeIdx = idx;
+  }
+}
+(function loop() { tick(false); requestAnimationFrame(loop); })();
+if (location.protocol.startsWith("http")) document.getElementById("back").hidden = false;
+applySource(); render(); showStatus();
+setTimeout(poll, 3000);
+addEventListener("resize", buildPiano);
+</script>
+</body>
+</html>
