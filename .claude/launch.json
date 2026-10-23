@@ -8,10 +8,10 @@
       "port": 8765
     },
     {
-      "name": "solfaflow-site-check",
-      "runtimeExecutable": "prototype/.venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "uvicorn", "server:app", "--app-dir", "prototype", "--port", "8766"],
-      "port": 8766
+      "name": "solfaflow-web-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "prototype/frontend", "run", "dev", "--", "--port", "5174", "--strictPort"],
+      "port": 5174
     }
   ]
 }
